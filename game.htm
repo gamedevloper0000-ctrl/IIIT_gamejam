@@ -9,12 +9,13 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23172d2c'/%3E%3Cpath d='M11 43 32 12l21 31-21 12z' fill='%23e4b866'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="src/style.css">
   <link rel="stylesheet" href="src/progression.css">
+  <link rel="stylesheet" href="src/jam.css">
 </head>
 <body>
   <div class="game-shell">
     <header class="topbar">
       <div class="brand"><span class="brand-mark">P<span>•</span></span><span>PLOT <strong>TWIST</strong><small>A VALLEY EXCHANGE STORY</small></span></div>
-      <div class="topbar-right"><button type="button" id="sound-toggle" class="sound-toggle" aria-pressed="false" aria-label="Turn game sound on">♪ SOUND OFF</button><span class="live-dot"></span><span>THE VALLEY EXCHANGE</span><span class="topbar-divider"></span><span id="top-day">DAY 01</span></div>
+      <div class="topbar-right"><button type="button" id="sound-toggle" class="sound-toggle" aria-pressed="false" aria-label="Turn game sound on">♪ SOUND OFF</button><button class="sound-toggle" data-jam="pause">Ⅱ MENU</button><span id="top-day">DAY 01</span></div>
     </header>
     <main class="main-grid">
       <section class="world-panel" aria-label="Land map">
@@ -32,6 +33,7 @@
           <button type="button" data-route="office" class="nav-item"><span>▤</span> Office</button>
           <button type="button" data-route="goal" class="nav-item"><span>✦</span> Goal</button>
         </nav>
+        <div id="objective" class="objective"></div>
         <div class="control-content"><div id="view" class="route-view"></div></div>
         <div class="control-bottom"><div><span>PORTFOLIO VALUE</span><strong id="portfolio-value">$0</strong></div><div><span>PLOTS HELD</span><strong id="plots-owned">0</strong></div><div><span>BUILDINGS</span><strong id="buildings-owned">0</strong></div></div>
       </aside>
@@ -39,6 +41,7 @@
   </div>
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
   <dialog id="results-dialog" aria-labelledby="results-title"></dialog>
+  <dialog id="game-dialog" aria-labelledby="game-dialog-title"></dialog>
   <script type="module" src="src/plot.js"></script>
 </body>
 </html>

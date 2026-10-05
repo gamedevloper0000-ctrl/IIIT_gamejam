@@ -4,6 +4,8 @@ import { renderOffice, renderAdvisorTips, renderBillPreview } from "./office.js"
 import { ParticleSystem } from "./effects.js";
 import { renderCar } from "./car.js";
 import { renderResults } from "./results.js";
+import { createSession } from "./session.js";
+import { renderObjective, renderChallenge, portrait } from "./jam-ui.js";
 import {
   COLS, ROWS, TICK_MS, TYPES, ORDERS, CUSTOMERS, INGREDIENTS, BUILDING, TWIST_BONUS, state, getPlot, selectedPlot,
   ownedValue, ownedBuildings, plotId, isRoad, subscribe, selectPlot,
@@ -48,11 +50,16 @@ let resultsResetArmed = false;
 let brewStart = 0;
 let twistAt = 0;
 let twistedCells = [];
+let session;
+let visualTime = 0;
+let previousFrame = 0;
+let suppressPourClickUntil = 0;
+let pourPointerActive = false;
 
 const headings = {
   land: ["The land ledger", "Select a parcel. Some deeds hide more than a price.", "01 / LAND"],
   market: ["Market watch", "Four terrains, four different price cycles.", "02 / MARKET"],
-  coffee: ["Corner coffee", "Mix, time the shot, and find the right customer.", "03 / WORK"],
+  coffee: ["Corner coffee", "A small ritual. A good cup. A familiar face.", "03 / WORK"],
   buildings: ["Build & grow", "A building lifts the value of nearby land each day.", "04 / BUILD"],
   goal: ["The long drive", "The red roadster is waiting for its next owner.", "06 / GOAL"]
 };
@@ -164,9 +171,9 @@ function renderCustomerQueue(coffee) {
     const person = CUSTOMERS.find(entry => entry.id === ORDERS[(coffee.orderIndex + offset) % ORDERS.length].customer);
     if (!people.some(entry => entry.id === person.id)) people.push(person);
   }
-  return `<div class="queue-caption">CUSTOMERS WAITING <span>${coffee.step === "completed" ? "CHOOSE WHO GETS THE CUP ↘" : "NEXT UP · " + people[0].name.toUpperCase()}</span></div>
+  return `<div class="queue-caption">CUSTOMERS WAITING <span>${coffee.step === "completed" ? "READY FOR " + people[0].name.toUpperCase() : "NEXT UP · " + people[0].name.toUpperCase()}</span></div>
     <div class="customer-queue" aria-label="Coffee shop customer line">${people.map((person, index) =>
-      `<button class="queue-person ${index === 0 ? "first" : ""} person-${person.id}" type="button" data-customer="${person.id}" aria-label="Serve ${person.name}, ${person.role}" ${coffee.step !== "completed" ? "disabled" : ""}>
+      `<button class="queue-person ${index === 0 ? "first" : ""} person-${person.id}" type="button" data-customer="${person.id}" aria-label="Serve ${person.name}, ${person.role}" ${coffee.step !== "completed" || index !== 0 ? "disabled" : ""}>
         <span class="pixel-person" aria-hidden="true"><i class="pixel-hair"></i><i class="pixel-face"></i><i class="pixel-shirt"></i><i class="pixel-arm left"></i><i class="pixel-arm right"></i><i class="pixel-legs"></i></span>
         <span class="queue-name">${person.name}<small>${person.role}</small></span></button>`).join("")}</div>`;
 }
@@ -176,25 +183,21 @@ function renderCoffee() {
   const order = ORDERS[coffee.orderIndex % ORDERS.length];
   const customer = CUSTOMERS.find(person => person.id === order.customer);
   const step = coffee.step;
-  if (step === "prepared" && !brewStart) brewStart = performance.now();
   const response = state.lastEvent?.kind === "coffee-ingredient"
     ? (state.lastEvent.correct ? "GOOD MIX · KEEP GOING" : "WRONG INGREDIENT · TIP DOWN") : "FOLLOW THE RECIPE ON THE TICKET";
   const stage = step === "new" ? `<div class="arcade-label">01 / MIX THE ORDER <span>${coffee.mistakes} ${coffee.mistakes === 1 ? "MISTAKE" : "MISTAKES"}</span></div>
       <div class="recipe-track">${order.ingredients.map((ingredient, index) => `<span class="${index < coffee.ingredientIndex ? "filled" : index === coffee.ingredientIndex ? "next" : ""}">${index < coffee.ingredientIndex ? "✓ " : ""}${ingredient}</span>`).join("")}</div>
       <div class="ingredient-pad">${ingredientChoices(order, coffee.orderIndex).map(ingredient => `<button data-ingredient="${ingredient}">${ingredient}</button>`).join("")}</div>
-      <p class="arcade-feedback">${response}</p>` : step === "prepared" ? `<div class="arcade-label">02 / TIME THE SHOT <span>HIT THE GOLD ZONE</span></div>
-      <p class="arcade-instruction">The needle sweeps back and forth. Stop it inside the gold window for a bigger tip.</p>
-      <div class="brew-meter" role="img" aria-label="Timing meter; stop the moving needle in the gold zone"><div class="brew-zone" style="left:${order.target - 8}%"></div><div class="brew-needle" id="brew-needle"></div></div>
-      <div class="brew-scale"><span>UNDER</span><span>SWEET SPOT</span><span>OVER</span></div>
-      <button class="primary brew-stop" data-action="brew">■ &nbsp; STOP THE SHOT</button>` : `<div class="arcade-label">03 / FIND THE CUSTOMER <span>${coffee.brewGrade === 2 ? "PERFECT SHOT" : coffee.brewGrade === 1 ? "GOOD SHOT" : "ROUGH SHOT"}</span></div>
-      <p class="arcade-instruction">The ticket says <strong>${customer.name}</strong>, the ${customer.role.toLowerCase()}. Tap the right person in the line above to hand over the cup.</p>`;
+      <p class="arcade-feedback">${response}</p>` : step === "prepared" ? renderChallenge(coffee, order) : `<div class="arcade-label">03 / HAND OVER THE CUP <span>${coffee.brewGrade === 2 ? "PERFECT BREW ★" : coffee.brewGrade === 1 ? "GOOD BREW" : "A LITTLE RUSTIC"}</span></div>
+      <div class="handoff-ready">${portrait(customer.id, coffee.brewGrade === 2 ? "happy" : "worried")}<p><strong>${customer.name}'s ready.</strong><br>${coffee.brewGrade === 2 ? "That smells wonderful, Joe." : "A warm cup still makes a good day."}</p></div><button class="primary brew-control" data-action="deliver">SERVE ${customer.name.toUpperCase()} →</button>`;
   return `${sectionHeading("coffee")}
-    <div class="shop-scene"><span class="shop-roof"></span><span class="shop-sign">THE CORNER CUP / OPEN LATE</span><span class="shop-window"></span><span class="shop-door"></span><span class="shop-counter"></span>${renderCustomerQueue(coffee)}</div>
+    ${state.lastEvent?.kind === "coffee-deliver" ? `<div class="coffee-receipt"><span>${state.lastEvent.perfect ? "★ PERFECT ORDER" : "THANKS, JOE!"}</span><b>+${money(state.lastEvent.amount)}</b></div>` : ""}
+    <div class="shop-scene ${state.lastEvent?.kind === "coffee-deliver" ? "queue-arrived" : ""}"><span class="shop-roof"></span><span class="shop-sign">THE CORNER CUP / OPEN LATE</span><span class="shop-window"></span><span class="shop-door"></span><span class="shop-counter"></span><i class="handoff-cup"></i><span class="shop-steam" aria-hidden="true">⌁</span>${renderCustomerQueue(coffee)}</div>
     <div class="order-paper"><span class="eyebrow-mini">TICKET #${String(coffee.served + 1).padStart(3, "0")} / ${customer.role.toUpperCase()}</span><strong class="order-pay">${money(Math.round(order.pay * (1 + employeeLevel("manager") * .12)))} + TIP</strong><h3>${order.name}</h3><p>FOR ${customer.name.toUpperCase()} &nbsp;·&nbsp; ${order.ingredients.join(" → ")}</p></div>
-    <div class="arcade-panel">${stage}</div>
+    <div class="arcade-panel">${stage}</div><div class="streak-strip"><span>★ ${coffee.streak} CLEAN IN A ROW · +${Math.min(5, coffee.streak) * 5}%</span><span>BEST ${coffee.bestStreak}</span></div>
     <div class="coffee-rumor"><span>LAST THING OVERHEARD</span><p>“${state.story.lastLine}”</p></div>
     <p class="shop-tip">${coffee.served} ${coffee.served === 1 ? "order" : "orders"} served · ${coffee.cleanOrders} perfect. ${state.story.chapter >= 2 ? `${coffee.twistPerfectProgress}/3 perfect orders toward your next plot turn.` : "Perfect orders will power the turntable once the secret is found."}</p>
-    <details class="asset-credits"><summary>ART + SOUND CREDITS</summary><p>Town tiles: <a href="https://kenney.nl/assets/tiny-town" target="_blank" rel="noopener noreferrer">Kenney</a> (CC0). Step dirt: <a href="https://freesound.org/people/heyheytheree/sounds/872597/" target="_blank" rel="noopener noreferrer">heyheytheree</a> (<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>). Coffee pour: <a href="https://freesound.org/people/Maajora/sounds/432775/" target="_blank" rel="noopener noreferrer">Maajora</a> (CC0). Cup: <a href="https://freesound.org/people/TheHiraHira/sounds/460242/" target="_blank" rel="noopener noreferrer">TheHiraHira</a> (CC0). Music: “The Morning Air” by Evan King, supplied by the project owner.</p></details>`;
+    <button class="text-button" data-jam="credits">ART & SOUND CREDITS</button>`;
 }
 
 function renderBuildings() {
@@ -227,15 +230,20 @@ function renderGoal() {
 
 const renderers = { land: renderLand, market: renderMarket, coffee: renderCoffee, buildings: renderBuildings, office: renderOffice, goal: renderGoal };
 function renderView() {
-  const ledgerOpen = view.querySelector(".ledger-history")?.open;
+  const openDetails = [...view.querySelectorAll("details")].map(detail => detail.open);
   const ledgerScroll = view.querySelector(".ledger-rows")?.scrollTop || 0;
+  const focused = document.activeElement;
+  const focusables = "button, summary, input, a[href], [tabindex]";
+  const focusIndex = [...view.querySelectorAll(focusables)].indexOf(focused);
+  const focusKey = focused && view.contains(focused) ? [...focused.attributes].find(attr => attr.name.startsWith("data-")) : null;
   view.innerHTML = renderers[route]();
-  // Daily price updates must not close a ledger the player is reading.
+  view.querySelectorAll("details").forEach((detail, index) => { detail.open = Boolean(openDetails[index]); });
   const ledger = view.querySelector(".ledger-history");
-  if (ledger && ledgerOpen) {
-    ledger.open = true;
+  if (ledger?.open) {
     ledger.querySelector(".ledger-rows").scrollTop = ledgerScroll;
   }
+  if (focusKey) view.querySelector(`[${focusKey.name}="${CSS.escape(focusKey.value)}"]`)?.focus({ preventScroll: true });
+  else if (focusIndex >= 0) view.querySelectorAll(focusables)[focusIndex]?.focus({ preventScroll: true });
 }
 function updateChrome() {
   moneyNode.textContent = money(state.money);
@@ -251,10 +259,23 @@ function updateChrome() {
 
   const hairColor = getPlayerHairColor(state.gameTime);
   document.querySelectorAll(".player-portrait").forEach(el => el.style.setProperty("--hair-color", hairColor));
+  const objectiveNode = $("#objective");
+  const nextObjective = renderObjective();
+  if (objectiveNode.innerHTML !== nextObjective) {
+    const focused = objectiveNode.contains(document.activeElement) ? document.activeElement.dataset.jam : null;
+    objectiveNode.innerHTML = nextObjective;
+    if (focused) objectiveNode.querySelector(`[data-jam="${focused}"]`)?.focus({ preventScroll: true });
+  }
+  const unlocks = { coffee: true, goal: true, land: state.story.chapter > 0 || state.ownedPlots.length > 0,
+    market: state.ownedPlots.length > 0 || state.story.chapter > 1,
+    buildings: state.story.twists > 0 || ownedBuildings() > 0,
+    office: state.commissions.mara.claimed || Object.values(state.employees).some(level => level > 0) };
+  document.querySelectorAll("[data-route]").forEach(button => { button.hidden = !unlocks[button.dataset.route]; });
 }
 
 function setRoute(next) {
   route = renderers[next] ? next : "land";
+  document.body.classList.toggle("route-coffee", route === "coffee");
   if (route !== "goal") resetArmed = false;
   document.querySelectorAll(".nav-item").forEach(button => {
     const active = button.dataset.route === route;
@@ -289,6 +310,7 @@ function notifyCarAvailable() {
 
 function openResults() {
   if (!state.carGoal.purchased || resultsDialog.open) return;
+  session.clock.pause("results");
   resultsResetArmed = false;
   resultsDialog.innerHTML = renderResults();
   resultsDialog.classList.remove("closing");
@@ -317,8 +339,9 @@ function restartRun() {
   $("#story-flash").textContent = "";
   $("#toast-stack").replaceChildren();
   resetGame();
-  location.hash = "land";
-  setRoute("land");
+  session.reset();
+  location.hash = "coffee";
+  setRoute("coffee");
 }
 
 function mapPoint(id) {
@@ -329,8 +352,8 @@ function spawnParticles(event) {
   const point = mapPoint(event.plotId);
   if (!point) return;
   particles.burst(event.kind, point.x, point.y);
-  mapGlows.push({ id: event.plotId, start: performance.now(), duration: 1050 });
-  popup.textContent = event.kind === "sell" ? `+${money(event.amount)}` : `−${money(event.amount)}`;
+  mapGlows.push({ id: event.plotId, start: visualTime, duration: 1050 });
+  popup.textContent = event.kind === "sell" ? `${signedMoney(event.profit)} NET` : `−${money(event.amount)}`;
   popup.style.left = `${point.x / canvasWidth * 100}%`;
   popup.style.top = `${point.y / canvasHeight * 100}%`;
   popup.classList.remove("show");
@@ -353,15 +376,13 @@ function handleEvent(event) {
   playSound(event.kind, event);
   if (event.carAvailable) notifyCarAvailable();
   if (event.kind === "select") return;
-  if (event.kind === "build") builtAt = performance.now();
+  if (event.kind === "build") builtAt = visualTime;
   const messages = {
     buy: ["LAND ACQUIRED", `${money(event.amount)} invested in your estate.`],
     sell: ["PLOT SOLD", `${money(event.amount)} received · ${signedMoney(event.profit)} net.`],
     build: ["FIELD STATION BUILT", "Nearby parcels gain value each day."],
     "no-money": ["NOT ENOUGH CASH", `${money(event.amount)} more needed.`],
-    "coffee-ready": ["RECIPE LOCKED", "Now time the shot in the gold zone."],
-    "coffee-brew": [event.grade === 2 ? "PERFECT SHOT" : event.grade === 1 ? "GOOD SHOT" : "ROUGH SHOT", "Find the customer on the ticket."],
-    "coffee-deliver": [event.correct ? "ORDER DELIVERED" : "WRONG CUSTOMER", `+${money(event.amount)} earned at the shop.`],
+    commission: ["COMMISSION PAID", `${money(event.amount)} from ${event.commissionId?.toUpperCase()}.`],
     "month-bill": [`MONTH ${event.month} CLOSED`, `Insurance ${money(event.insurance)} + tax ${money(event.tax)} = ${money(event.total)} paid.`],
     "employee-upgrade": ["TEAM UPGRADED", `${EMPLOYEES.find(employee => employee.id === event.employeeId)?.name || "Employee"} is now level ${event.level}.`],
     twist: ["THE PLOTS TURNED", "Four deeds rotated clockwise."],
@@ -380,7 +401,7 @@ function handleEvent(event) {
   if (event.chargeEarned) notify("TURN EARNED", "Perfect coffee work earned a new plot twist.");
   if (["buy", "sell", "build"].includes(event.kind)) spawnParticles(event);
   if (event.kind === "twist") {
-    twistAt = performance.now();
+    twistAt = visualTime;
     twistedCells = event.block;
     flashStory("THE PLOTS TURN!");
     for (const id of event.block) {
@@ -394,7 +415,13 @@ function handleEvent(event) {
   }
   if (event.kind === "goal") {
     particles.celebrate(canvasWidth);
-    openResults();
+    session.show("ending");
+  }
+  if (event.kind === "coffee-deliver" && event.perfect) {
+    view.classList.add("perfect-order");
+    setTimeout(() => view.classList.remove("perfect-order"), 950);
+    const point = mapPoint(state.selectedId || state.story.anomalyId);
+    if (point) particles.burst("perfect", point.x, point.y);
   }
 }
 
@@ -451,6 +478,10 @@ function drawTerrainDetail(plot) {
     ctx.drawImage(exportImg, 0, 0, 31, 12, x, y, s + 0.5, s + 0.5);
     ctx.fillStyle = "rgba(70, 150, 180, 0.20)";
     ctx.fillRect(x, y, s + 0.5, s + 0.5);
+    ctx.fillStyle = "rgba(224,249,211,.34)";
+    const shimmer = session?.reduced() ? 0 : Math.sin(visualTime / 1800 + seed) * s * .05;
+    ctx.fillRect(x + s * .2 + shimmer, y + s * .3, s * .2, Math.max(1, s * .025));
+    ctx.fillRect(x + s * .6 - shimmer, y + s * .68, s * .16, Math.max(1, s * .025));
     return;
   }
 
@@ -482,7 +513,7 @@ function drawTerrainDetail(plot) {
 function drawBuilding(plot, now) {
   const [x, y, s] = tileRect(plot.x, plot.y);
   const age = Math.max(0, (now - builtAt) / 400);
-  const bounce = state.lastEvent?.kind === "build" && state.lastEvent.plotId === plot.id && age < 1 ? 1 + Math.sin(age * Math.PI) * .2 : 1;
+  const bounce = !session?.reduced() && state.lastEvent?.kind === "build" && state.lastEvent.plotId === plot.id && age < 1 ? 1 + Math.sin(age * Math.PI) * .2 : 1;
   ctx.save(); ctx.translate(x + s * .5, y + s * .52); ctx.scale(bounce, bounce);
   ctx.fillStyle = "rgba(20,47,34,.36)"; ctx.fillRect(-s * .31, s * .24, s * .65, s * .08);
   const part = s * .35;
@@ -501,7 +532,7 @@ function drawMap(now) {
   ctx.fillStyle = "#345c4b"; ctx.fillRect(originX - 6, originY - 6, COLS * tileSize + 12, ROWS * tileSize + 12);
   for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
     if (isRoad(x, y)) drawRoad(x, y);
-    else { const plot = getPlot(plotId(x, y)); drawTerrainDetail(plot); }
+    else { const plot = getPlot(plotId(x, y)); if (!session?.turning?.preview.block.includes(plot.id)) drawTerrainDetail(plot); }
   }
   drawgrid(ctx, originX, originY, COLS, ROWS, tileSize, "rgba(27,59,43,.10)");
   mapGlows = mapGlows.filter(glow => now - glow.start < glow.duration);
@@ -522,7 +553,7 @@ function drawMap(now) {
   if (state.story.chapter === 1) {
     const marked = getPlot(state.story.anomalyId);
     const [x, y, s] = tileRect(marked.x, marked.y);
-    const pulse = .62 + Math.sin(now / 260) * .25;
+    const pulse = session?.reduced() ? .85 : .62 + Math.sin(now / 260) * .25;
     ctx.fillStyle = `rgba(252,217,117,${pulse * .22})`; ctx.fillRect(x, y, s, s);
     ctx.strokeStyle = `rgba(255,235,156,${pulse})`; ctx.lineWidth = Math.max(2, s * .055);
     ctx.strokeRect(x + 3, y + 3, s - 6, s - 6);
@@ -531,7 +562,7 @@ function drawMap(now) {
     ctx.textAlign = "center"; ctx.fillText("?", x + s * .775, y + s * .3);
   }
   const selected = selectedPlot();
-  if (state.story.chapter >= 2 && selected) {
+  if (state.story.chapter >= 2 && selected && !session?.turning) {
     for (const plot of getTwistBlock()) {
       highlight(ctx, plot.x, plot.y, originX, originY, tileSize, "rgba(255,220,119,.12)");
       const [x, y, s] = tileRect(plot.x, plot.y);
@@ -540,13 +571,14 @@ function drawMap(now) {
       ctx.setLineDash([]);
     }
   }
-  if (selected?.building) {
+  if (selected && (selected.building || route === "buildings")) {
     for (const neighbor of state.plots) {
       const distance = Math.abs(selected.x - neighbor.x) + Math.abs(selected.y - neighbor.y);
       if (distance > 0 && distance <= BUILDING.radius) highlight(ctx, neighbor.x, neighbor.y, originX, originY, tileSize, "rgba(241,219,135,.12)");
     }
   }
   for (const plot of state.plots) {
+    if (session?.turning?.preview.block.includes(plot.id)) continue;
     const [x, y, s] = tileRect(plot.x, plot.y);
     if (plot.owner === "player") {
       ctx.strokeStyle = "#f6db9d"; ctx.lineWidth = Math.max(2, s * .065);
@@ -559,9 +591,9 @@ function drawMap(now) {
     const plot = getPlot(hoverId);
     if (plot) { const [x, y, s] = tileRect(plot.x, plot.y); ctx.fillStyle = "rgba(255,247,190,.18)"; ctx.fillRect(x, y, s, s); }
   }
-  if (selected) {
+  if (selected && !session?.turning) {
     const [x, y, s] = tileRect(selected.x, selected.y);
-    const pulse = 1 + Math.sin(now / 280) * .05;
+    const pulse = session?.reduced() ? 1 : 1 + Math.sin(now / 280) * .05;
     ctx.save(); ctx.translate(x + s / 2, y + s / 2); ctx.scale(pulse, pulse);
     ctx.strokeStyle = "#fff4c5"; ctx.lineWidth = Math.max(2, s * .07);
     ctx.shadowColor = "#fff1ba"; ctx.shadowBlur = 10;
@@ -578,23 +610,51 @@ function drawMap(now) {
       ctx.strokeRect(x + 2, y + 2, s - 4, s - 4);
     }
   }
+  if (session?.turning) drawTurningParcels(session.turning, now);
+  particles.reduced = session?.reduced() || false;
   particles.draw(ctx, now);
 }
 
-function brewPosition(now) {
-  const sweep = ((now - brewStart) / 1550) % 2;
-  return Math.max(0, Math.min(100, (sweep <= 1 ? sweep : 2 - sweep) * 100));
+function drawTurningParcels(turn, now) {
+  const moves = turn.preview.moves;
+  const cx = moves.reduce((sum, move) => sum + move.before.x + .5, 0) / 4;
+  const cy = moves.reduce((sum, move) => sum + move.before.y + .5, 0) / 4;
+  const progress = Math.min(1, turn.elapsed / (turn.duration || 1));
+  const ease = progress * progress * (3 - 2 * progress);
+  const angle = ease * Math.PI / 2;
+  const centerX = originX + cx * tileSize, centerY = originY + cy * tileSize;
+  for (const { before: plot } of moves) {
+    const dx = (plot.x + .5 - cx) * tileSize, dy = (plot.y + .5 - cy) * tileSize;
+    const tx = centerX + dx * Math.cos(angle) - dy * Math.sin(angle);
+    const ty = centerY + dx * Math.sin(angle) + dy * Math.cos(angle);
+    const [x, y, s] = tileRect(plot.x, plot.y);
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,227,143,.55)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(centerX, centerY, Math.hypot(dx, dy), Math.atan2(dy, dx), Math.atan2(dy, dx) + angle); ctx.stroke();
+    ctx.translate(tx - x - s / 2, ty - y - s / 2);
+    ctx.shadowColor = "#071e1b88"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 5;
+    drawTerrainDetail(plot); ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.strokeStyle = plot.owner === "player" ? "#ffeab0" : "#678458"; ctx.lineWidth = plot.owner === "player" ? 3 : 1;
+    ctx.strokeRect(x + 2, y + 2, s - 4, s - 4);
+    if (plot.building) drawBuilding(plot, now);
+    ctx.fillStyle = "#fff2bd";
+    for (let i = 0; i < 3; i++) ctx.fillRect(x + s * .15 + i * s * .25, y + s - 3 + Math.sin(progress * 9 + i) * 3, 2, 2);
+    ctx.restore();
+  }
 }
 
 function animate(now) {
   requestAnimationFrame(animate);
+  const rawDelta = previousFrame ? Math.min(100, now - previousFrame) : 0;
+  previousFrame = now;
+  session.frame(rawDelta);
+  const { delta, ticks } = session.clock.advance(now);
+  session.advance(delta);
+  for (let i = 0; i < ticks; i++) tick();
+  if (!session.clock.paused || session.turning) visualTime += document.hidden ? 0 : rawDelta;
   if (now - lastFrame < 32) return;
   lastFrame = now;
-  drawMap(now);
-  if (route === "coffee" && state.coffeeShopProgress.step === "prepared") {
-    const needle = $("#brew-needle");
-    if (needle) needle.style.left = `${brewPosition(now)}%`;
-  }
+  drawMap(visualTime);
 }
 
 function tileFromPointer(event) {
@@ -607,6 +667,7 @@ function tileFromPointer(event) {
 canvas.addEventListener("pointermove", event => { hoverId = tileFromPointer(event); canvas.style.cursor = hoverId ? "pointer" : "default"; });
 canvas.addEventListener("pointerleave", () => { hoverId = null; });
 canvas.addEventListener("click", event => {
+  if (session.clock.paused) return;
   const id = tileFromPointer(event);
   if (!id) return;
   selectPlot(id);
@@ -614,6 +675,7 @@ canvas.addEventListener("click", event => {
 });
 canvas.tabIndex = 0;
 canvas.addEventListener("keydown", event => {
+  if (session.clock.paused) return;
   if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
   event.preventDefault();
   const current = selectedPlot() || state.plots[0];
@@ -627,6 +689,7 @@ canvas.addEventListener("keydown", event => {
 });
 
 document.querySelectorAll(".nav-item").forEach(button => button.addEventListener("click", () => {
+  if (session.clock.paused) return;
   playSound("navigate");
   location.hash = button.dataset.route;
   if (route === button.dataset.route) setRoute(route);
@@ -642,33 +705,59 @@ soundButton.addEventListener("click", () => { setSoundEnabled(!soundEnabled()); 
 document.addEventListener("pointerdown", resumeSound, { once: true });
 window.addEventListener("hashchange", () => setRoute(location.hash.slice(1)));
 view.addEventListener("click", event => {
+  // A touch release must not click the new handoff button that replaced the pour button.
+  if (performance.now() < suppressPourClickUntil) { event.preventDefault(); return; }
+  if (session.clock.paused) return;
   const choice = event.target.closest("[data-select]");
   if (choice) { selectPlot(choice.dataset.select); location.hash = "land"; return; }
   const ingredient = event.target.closest("[data-ingredient]")?.dataset.ingredient;
   if (ingredient) { prepareCoffee(ingredient); return; }
   const customer = event.target.closest("[data-customer]")?.dataset.customer;
-  if (customer) { deliverCoffee(customer); return; }
+  if (customer) { session.beginHandoff(); return; }
+  const brew = event.target.closest("[data-brew]")?.dataset.brew;
+  if (brew && brew !== "pour") { session.brew(brew); return; }
   const employee = event.target.closest("[data-employee]")?.dataset.employee;
   if (employee) { upgradeEmployee(employee); return; }
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (!action) return;
-  if (action === "brew") {
-    if (state.coffeeShopProgress.step !== "prepared") return;
-    const order = ORDERS[state.coffeeShopProgress.orderIndex % ORDERS.length];
-    const error = Math.abs(brewPosition(performance.now()) - order.target);
-    const grade = error <= 8 ? 2 : error <= 19 ? 1 : 0;
-    brewStart = 0;
-    completeCoffee(grade);
-    return;
-  }
+  if (action === "deliver") { session.beginHandoff(); return; }
   if (action === "reset") {
     if (!resetArmed) { resetArmed = true; renderView(); return; }
     restartRun();
     return;
   }
-  ({ buy: buySelected, sell: sellSelected, build: buildSelected, twist: twistSelected,
+  ({ buy: buySelected, sell: sellSelected, build: buildSelected, twist: () => session.openPreview(),
     goal: purchaseCar, results: openResults, "coffee-route": () => { location.hash = "coffee"; },
     "office-route": () => { location.hash = "office"; } })[action]?.();
+});
+
+// Stable container capture survives the challenge-start render on a held pointer.
+view.addEventListener("pointerdown", event => {
+  if (event.target.closest('[data-brew="pour"]') && !session.clock.paused) {
+    event.preventDefault();
+    pourPointerActive = true;
+    view.setPointerCapture(event.pointerId);
+    session.startPour();
+    view.querySelector('[data-brew="pour"]')?.focus({ preventScroll: true });
+  }
+});
+view.addEventListener("pointerup", () => {
+  if (!pourPointerActive) return;
+  pourPointerActive = false; suppressPourClickUntil = performance.now() + 350; session.stopPour();
+});
+view.addEventListener("pointercancel", () => { pourPointerActive = false; session.stopPour(); });
+view.addEventListener("keydown", event => {
+  const control = event.target.closest("[data-brew]");
+  if (!control || !["Space", "Enter"].includes(event.code)) return;
+  event.preventDefault();
+  if (event.repeat) return;
+  if (control.dataset.brew === "pour") session.startPour();
+  else session.brew(control.dataset.brew);
+});
+view.addEventListener("keyup", event => {
+  if (event.target.closest("[data-brew]") && ["Space", "Enter"].includes(event.code)) {
+    event.preventDefault(); session.stopPour();
+  }
 });
 
 resultsDialog.addEventListener("click", event => {
@@ -687,18 +776,27 @@ resultsDialog.addEventListener("click", event => {
   }
 });
 resultsDialog.addEventListener("cancel", event => { event.preventDefault(); closeResults(); });
-resultsDialog.addEventListener("close", () => document.body.classList.remove("results-open"));
+resultsDialog.addEventListener("close", () => { document.body.classList.remove("results-open"); session.clock.resume("results"); });
 
+session = createSession({ navigate(next) { location.hash = next; setRoute(next); }, restart: restartRun, results: openResults, soundChanged: updateSoundButton });
+function placeObjective() {
+  const anchor = matchMedia("(min-width:761px)").matches ? $(".world-heading") : $(".main-nav");
+  if (anchor.nextElementSibling !== $("#objective")) anchor.after($("#objective"));
+}
+placeObjective();
+window.addEventListener("resize", placeObjective);
+document.addEventListener("visibilitychange", () => { previousFrame = 0; });
 subscribe((_, kind) => {
   updateChrome();
-  if (kind || ["land", "market", "buildings", "office"].includes(route)) renderView();
+  if ((kind && !(kind === "month-bill" && route === "coffee")) || ["land", "market", "buildings", "office"].includes(route)) renderView();
   handleEvent(state.lastEvent);
+  queueMicrotask(() => session.checkStory());
 });
 const observer = new ResizeObserver(resizeCanvas);
 observer.observe(canvas);
 resizeCanvas();
-setRoute(location.hash.slice(1));
+setRoute(location.hash.slice(1) || "coffee");
 updateChrome();
 updateSoundButton();
-setInterval(() => { if (!resultsDialog.open) tick(); }, TICK_MS);
+session.show("title");
 requestAnimationFrame(animate);

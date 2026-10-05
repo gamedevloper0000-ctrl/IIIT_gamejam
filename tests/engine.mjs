@@ -27,7 +27,7 @@ test("coffee skill, story clue, twist and save", async () => {
   assert.equal(new Set(game.state.plots.map(plot => plot.type)).size, 4);
   assert.equal(game.prepareCoffee("FOAM"), false);
   finishOrder(game, 0, "dax");
-  assert.equal(game.state.money, 148); // wrong ingredient, rough brew, wrong customer
+  assert.equal(game.state.money, 172); // mistakes lose tips and streak, never the $52 base pay
   assert.equal(game.state.story.chapter, 0);
   finishOrder(game);
   finishOrder(game);
@@ -185,7 +185,7 @@ test("employees change real costs and earnings, with no instant land arbitrage",
   assert.equal(game.state.finance.worstDeal.profit, game.state.money - beforeTrade);
   const beforeCoffee = game.state.money;
   finishOrder(game);
-  const pay = Math.round((52 + 16 + 8 + 12) * 1.24);
+  const pay = Math.round((52 + 16 + 8 + 12) * 1.24 * 1.05); // first clean order adds 5%
   assert.equal(game.state.money - beforeCoffee, pay);
   assert.equal(game.state.finance.coffeeEarnings, pay);
   const loaded = await freshGame(storage.value);
@@ -271,4 +271,209 @@ test("car availability notifies once, requires purchase, and reset clears every 
   assert.equal(game.state.finance.lastBill, null);
   assert.equal(game.state.carGoal.availabilityAnnounced, false);
   assert.equal(game.state.carGoal.purchased, false);
+});
+
+test("curated and replay maps guarantee an affordable, road-free first twist", async () => {
+  const { game } = await freshGame();
+  for (let run = 0; run < 30; run++) {
+    game.resetGame();
+    assert.equal(new Set(game.state.plots.map(plot => plot.id)).size, 99);
+    assert.equal(new Set(game.state.plots.map(plot => plot.deedId)).size, 99);
+    assert.equal(new Set(game.state.plots.map(plot => plot.type)).size, 4);
+    finishOrder(game, 0); finishOrder(game, 0);
+    for (let day = 0; day < 20; day++) game.tick();
+    game.selectPlot(game.state.story.anomalyId);
+    assert.ok(game.purchaseCost(game.selectedPlot()) <= game.state.money);
+    assert.equal(game.buySelected(), true);
+    assert.equal(game.getTwistBlock().length, 4);
+    assert.ok(game.getTwistBlock().every(plot => !game.isRoad(plot.x, plot.y)));
+    assert.ok(game.previewTwist().gain > 0);
+  }
+});
+
+test("twist preview is pure, matches commit, rejects stale and duplicate transactions", async () => {
+  const { game } = await freshGame();
+  game.state.money = 2000;
+  game.selectPlot("1-1"); game.buySelected(); game.buildSelected();
+  game.state.story.chapter = 2; game.state.story.twistCharges = 3;
+  const before = JSON.stringify(game.state);
+  const preview = game.previewTwist();
+  assert.equal(JSON.stringify(game.state), before);
+  const expected = structuredClone(preview.moves);
+  preview.moves[0].after.owner = "hacker"; // cargo is never trusted
+  assert.equal(game.commitTwist(preview), true);
+  for (const move of expected) {
+    const committed = game.getPlot(move.to);
+    for (const key of ["deedId", "owner", "currentValue", "costBasis", "surveyBonus"])
+      assert.equal(committed[key], move.after[key], key);
+    assert.deepEqual(committed.building, move.after.building);
+  }
+  assert.equal(game.commitTwist(preview), false);
+  const stale = game.previewTwist(); game.tick();
+  assert.equal(game.commitTwist(stale), false);
+  assert.equal(game.state.story.twists, 1);
+  assert.equal(game.state.story.twistCharges, 2);
+});
+
+test("all three commissions require their action and pay once across reloads", async () => {
+  const { game, storage } = await freshGame();
+  assert.equal(game.claimCommission("mara"), false);
+  finishOrder(game); finishOrder(game);
+  game.selectPlot("1-1"); game.buySelected();
+  assert.equal(game.state.commissions.mara.complete, false);
+  game.twistSelected();
+  const money = game.state.money;
+  assert.equal(game.claimCommission("mara"), true);
+  assert.equal(game.state.money, money + 350);
+  assert.equal(game.claimCommission("mara"), false);
+  game.buildSelected();
+  finishOrder(game); // cash for the second parcel
+  game.selectPlot("2-0"); assert.equal(game.buySelected(), true);
+  game.tick();
+  assert.equal(game.state.commissions.dax.complete, false); // growth without a moved station doesn't count
+  game.selectPlot(game.state.plots.find(plot => plot.building).id);
+  const preview = game.previewTwist();
+  assert.ok(preview.afterInfluence.some(station => station.neighbors > 0));
+  assert.equal(game.commitTwist(preview), true);
+  assert.equal(game.state.commissions.dax.complete, false);
+  game.tick();
+  assert.equal(game.state.commissions.dax.complete, true);
+  assert.equal(game.claimCommission("dax"), true);
+  const target = game.getPlot("2-0");
+  game.selectPlot(target.id);
+  for (let i = 0; i < 70 && game.saleValue(target) - target.costBasis < 100; i++) game.tick();
+  assert.ok(game.saleValue(target) - target.costBasis >= 100);
+  assert.equal(game.state.commissions.nell.complete, false);
+  game.sellSelected();
+  assert.equal(game.claimCommission("nell"), true);
+  assert.equal(game.state.finance.commissionEarnings, 2150);
+  const reloaded = (await freshGame(storage.value)).game;
+  for (const id of ["mara", "dax", "nell"]) assert.equal(reloaded.claimCommission(id), false);
+  assert.equal(reloaded.state.finance.commissionEarnings, 2150);
+});
+
+test("Nell counts construction and sale fees and rejects a quick or undeveloped sale", async () => {
+  const { game } = await freshGame();
+  game.state.money = 2000;
+  game.selectPlot("1-1"); game.buySelected(); game.buildSelected();
+  game.tick(); game.sellSelected();
+  assert.equal(game.state.commissions.nell.complete, false);
+  game.selectPlot("9-9"); game.buySelected();
+  game.selectedPlot().surveyBonus = 140;
+  game.tick();
+  assert.ok(game.saleValue(game.selectedPlot()) - game.selectedPlot().costBasis >= 100);
+  game.sellSelected();
+  assert.equal(game.state.commissions.nell.complete, false);
+});
+
+test("clean streak pays 5% per perfect order capped at 25%, and mistakes preserve base pay", async () => {
+  const { game } = await freshGame();
+  for (let i = 1; i <= 8; i++) {
+    const order = game.ORDERS[game.state.coffeeShopProgress.orderIndex % game.ORDERS.length];
+    const before = game.state.money;
+    finishOrder(game);
+    assert.equal(game.state.money - before, Math.round((order.pay + 36) * (1 + Math.min(i, 5) * .05)));
+  }
+  assert.equal(game.state.coffeeShopProgress.bestStreak, 8);
+  game.prepareCoffee("ICE");
+  assert.equal(game.state.coffeeShopProgress.streak, 0);
+  const before = game.state.money;
+  finishOrder(game, 0, "dax");
+  assert.equal(game.state.money - before, 52);
+  assert.equal(game.state.coffeeShopProgress.streak, 0);
+});
+
+test("pour, rhythm and pressure use simulation time, with recoverable misses", async () => {
+  const { game } = await freshGame();
+  function mix() {
+    const order = game.ORDERS[game.state.coffeeShopProgress.orderIndex % game.ORDERS.length];
+    order.ingredients.forEach(game.prepareCoffee);
+    return order;
+  }
+  mix();
+  game.advanceCoffee(1000, true);
+  assert.equal(game.state.coffeeShopProgress.challenge.fill, 0); // not started
+  game.startCoffeeChallenge(); game.advanceCoffee(68 * 42, true); game.finishCoffeeChallenge();
+  assert.equal(game.state.coffeeShopProgress.brewGrade, 2);
+  game.deliverCoffee("mara"); mix(); game.startCoffeeChallenge();
+  for (let beat = 0; beat < 3; beat++) { game.advanceCoffee(1000); assert.equal(game.tapCoffeeBeat(), true); }
+  assert.equal(game.state.coffeeShopProgress.brewGrade, 2);
+  game.deliverCoffee("dax"); mix(); game.startCoffeeChallenge();
+  game.advanceCoffee(5000, true); // overfill auto-finishes without softlocking
+  assert.equal(game.state.coffeeShopProgress.step, "completed");
+  assert.equal(game.state.coffeeShopProgress.brewGrade, 0);
+  game.deliverCoffee("nell"); mix(); game.startCoffeeChallenge();
+  game.advanceCoffee(1550 * .47); game.finishCoffeeChallenge();
+  assert.equal(game.state.coffeeShopProgress.brewGrade, 2);
+});
+
+test("pause reasons freeze the economy and challenges without catch-up bills", async () => {
+  const { GameClock } = await import("../src/clock.js");
+  const clock = new GameClock(3500);
+  const { game } = await freshGame();
+  game.ORDERS[0].ingredients.forEach(game.prepareCoffee);
+  game.startCoffeeChallenge();
+  function frame(now) {
+    const { delta, ticks } = clock.advance(now);
+    game.advanceCoffee(delta, true);
+    for (let day = 0; day < ticks; day++) game.tick();
+  }
+  frame(0); for (let now = 100; now <= 1000; now += 100) frame(now);
+  const fill = game.state.coffeeShopProgress.challenge.fill;
+  clock.pause("settings"); clock.pause("hidden"); frame(50000);
+  clock.resume("settings"); frame(60000);
+  assert.equal(clock.paused, true);
+  clock.resume("hidden"); frame(900000);
+  assert.equal(game.state.coffeeShopProgress.challenge.fill, fill);
+  assert.equal(game.state.gameTime, 0);
+  assert.equal(game.state.finance.lastBill, null);
+  frame(900100);
+  assert.ok(game.state.coffeeShopProgress.challenge.fill > fill);
+  assert.equal(clock.dayElapsed, 1100);
+});
+
+test("version-one migration preserves wealth, staff, car and prepared brew; settings and progress persist", async () => {
+  const { game } = await freshGame();
+  game.state.money = 5000; game.selectPlot("1-1"); game.buySelected(); game.buildSelected();
+  game.upgradeEmployee("manager"); game.purchaseCar();
+  const old = structuredClone(game.state);
+  old.version = 1;
+  delete old.settings; delete old.commissions; delete old.tutorial; delete old.conversations;
+  delete old.coffeeShopProgress.challenge;
+  old.coffeeShopProgress.step = "prepared";
+  const { game: migrated, storage } = await freshGame(JSON.stringify(old));
+  assert.equal(migrated.state.money, old.money);
+  assert.equal(migrated.ownedValue(), game.ownedValue());
+  assert.equal(migrated.employeeLevel("manager"), 1);
+  assert.equal(migrated.state.carGoal.purchased, true);
+  assert.equal(migrated.state.coffeeShopProgress.challenge.kind, "pressure");
+  migrated.updateSettings({ music: .21, sfx: .36, reducedMotion: true, sound: true });
+  migrated.startCoffeeChallenge(); migrated.advanceCoffee(271); migrated.checkpoint();
+  const restored = (await freshGame(storage.value)).game;
+  assert.equal(restored.state.coffeeShopProgress.challenge.elapsed, 271);
+  assert.deepEqual(restored.state.settings, { music: .21, sfx: .36, reducedMotion: true, sound: true });
+  restored.resetGame();
+  assert.equal(restored.state.settings.reducedMotion, true);
+  assert.equal(restored.state.coffeeShopProgress.streak, 0);
+});
+
+test("unavailable storage still allows the full gameplay model", async () => {
+  globalThis.localStorage = { getItem() { throw Error("denied"); }, setItem() { throw Error("denied"); } };
+  const game = await import(`data:text/javascript;base64,${source}#blocked-${run++}`);
+  assert.equal(game.state.money, 120);
+  game.startRun(); finishOrder(game);
+  assert.equal(game.state.coffeeShopProgress.served, 1);
+  assert.ok(game.state.money > 120);
+});
+
+test("particle limit and pool remain bounded through repeated celebrations", async () => {
+  const { ParticleSystem } = await import("../src/effects.js");
+  const particles = new ParticleSystem();
+  for (let i = 0; i < 100; i++) particles.celebrate(800);
+  assert.equal(particles.particles.length, 160);
+  const first = particles.particles[0]; particles.clear(); particles.burst("buy", 0, 0);
+  assert.equal(particles.particles.length + particles.pool.length, 160);
+  assert.ok(particles.pool.includes(first) || particles.particles.includes(first));
+  particles.clear(); particles.reduced = true; particles.burst("twist", 0, 0);
+  assert.equal(particles.particles.length, 0);
 });

@@ -20,7 +20,7 @@ export function renderBillPreview(compact = false) {
 
 function renderLedger() {
   const finance = state.finance;
-  const labels = { coffee: "Coffee order", buy: "Land purchase", sell: "Land sale", build: "Field station", staff: "Office upgrade", bill: "Insurance + tax", car: "Red roadster" };
+  const labels = { coffee: "Coffee order", buy: "Land purchase", sell: "Land sale", build: "Field station", staff: "Office upgrade", bill: "Insurance + tax", car: "Red roadster", commission: "Commission reward" };
   const rows = [...finance.history].reverse().map(entry => {
     const billDetail = entry.kind === "bill" && Number.isFinite(entry.insurance) && Number.isFinite(entry.tax)
       ? `<small>Insurance ${money(entry.insurance)} · Tax ${money(entry.tax)}</small>` : "";

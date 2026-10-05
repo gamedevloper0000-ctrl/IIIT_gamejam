@@ -5,6 +5,13 @@ export const TICK_MS = 3500;
 export const DAYS_PER_MONTH = 30;
 export const SALE_FEE_RATE = .05;
 export const TWIST_BONUS = 35;
+export const COMMISSIONS = [
+  { id: "mara", name: "The strange deed", reward: 350, text: "Buy the marked parcel, then twist its block once." },
+  { id: "dax", name: "A better neighborhood", reward: 700, text: "Twist your field station into range of another parcel you own. Let that parcel gain value for one day." },
+  { id: "nell", name: "A delivery worth making", reward: 1100, text: "Develop a parcel and sell it for at least $100 net profit, after construction and closing fees." }
+];
+export const DEFAULT_SETTINGS = { sound: false, music: .35, sfx: .7, reducedMotion: null };
+const emptyChallenge = kind => ({ kind, started: false, elapsed: 0, fill: 0, taps: [] });
 export const BUILDING = { cost: 320, radius: 2, valuePerDay: 7, selfValuePerDay: 4,
   resaleValue: 200, maxPlotBonus: 280 };
 export const TYPES = [
@@ -41,13 +48,13 @@ export function getPlayerHairStatus(gameTime = state.gameTime) {
   return `White hair (Day ${gameTime + 1})`;
 }
 export const ORDERS = [
-  { name: "Honey latte", ingredients: ["SHOT", "MILK", "HONEY"], customer: "mara", target: 68, pay: 52,
+  { name: "Honey latte", challenge: "pour", ingredients: ["SHOT", "MILK", "HONEY"], customer: "mara", target: 68, pay: 52,
     line: "The road on that old survey keeps changing places." },
-  { name: "Cinnamon cappuccino", ingredients: ["SHOT", "FOAM", "CINNAMON"], customer: "dax", target: 38, pay: 56,
+  { name: "Cinnamon cappuccino", challenge: "rhythm", ingredients: ["SHOT", "FOAM", "CINNAMON"], customer: "dax", target: 38, pay: 56,
     line: "Someone has been swapping the town's deed numbers at night." },
-  { name: "Iced mocha", ingredients: ["SHOT", "CHOCOLATE", "ICE"], customer: "nell", target: 73, pay: 60,
+  { name: "Iced mocha", challenge: "pour", ingredients: ["SHOT", "CHOCOLATE", "ICE"], customer: "nell", target: 73, pay: 60,
     line: "I delivered a stamped deed to the bright yellow lot." },
-  { name: "Double espresso", ingredients: ["SHOT", "SHOT"], customer: "mara", target: 47, pay: 48,
+  { name: "Double espresso", challenge: "pressure", ingredients: ["SHOT", "SHOT"], customer: "mara", target: 47, pay: 48,
     line: "There is a handle behind the town map. I have seen it." }
 ];
 export const INGREDIENTS = ["SHOT", "MILK", "FOAM", "HONEY", "CINNAMON", "CHOCOLATE", "ICE"];
@@ -68,7 +75,7 @@ function makePlot(x, y, seed) {
   const patch = (Math.floor(x / 3) * 3 + Math.floor(y / 2) * 5 + (hash(x, y, seed) % 3)) % 4;
   const basePrice = Math.round(TYPES[patch].base * (0.83 + (hash(y, x, seed) % 35) / 100));
   return {
-    id: plotId(x, y), x, y, type: patch, owner: null,
+    id: plotId(x, y), deedId: plotId(x, y), x, y, type: patch, owner: null,
     basePrice, currentPrice: basePrice, currentValue: basePrice,
     purchasePrice: null, costBasis: null, building: null,
     buildingEffects: 0, surveyBonus: 0, priceHistory: [basePrice]
@@ -82,32 +89,40 @@ function marketMultiplier(type, day) {
   return Math.max(0.72, Math.min(1.55, 1 + wave + longWave + Math.min(day * 0.0015, 0.17)));
 }
 
-function makeState(seed = Math.floor(Math.random() * 0x7fffffff)) {
+function makeState(seed = 2026) {
   const plots = [];
   for (let y = 0; y < ROWS; y++) {
     for (let x = 0; x < COLS; x++) {
       if (!isRoad(x, y)) plots.push(makePlot(x, y, seed));
     }
   }
+  // A road-free, affordable opening block is guaranteed on every new map.
+  [[1, 1, 0, 155], [2, 1, 1, 170], [2, 2, 2, 205], [1, 2, 0, 160]].forEach(([x, y, type, price]) => {
+    const plot = plots.find(entry => entry.x === x && entry.y === y);
+    Object.assign(plot, { type, basePrice: price, currentPrice: price, currentValue: price, priceHistory: [price] });
+  });
   const market = TYPES.map((type, index) => ({
     basePrice: type.base, currentPrice: type.base, previousPrice: type.base,
     history: [type.base], movement: 0, type: index
   }));
-  const nearbySunfields = plots.filter(plot => plot.type === 0 && plot.x < 5 && plot.y < 4);
-  const marked = (nearbySunfields.length ? nearbySunfields : plots.filter(plot => plot.type === 0))
-    .sort((a, b) => a.basePrice - b.basePrice);
   return {
-    version: 1, seed, money: 120, gameTime: 0, plots, market,
+    version: 2, seed, money: 120, gameTime: 0, plots, market,
     ownedPlots: [], plotPrices: Object.fromEntries(plots.map(plot => [plot.id, plot.currentPrice])),
     buildings: [], selectedId: null,
     coffeeShopProgress: { step: "new", orderIndex: 0, served: 0, correctDeliveries: 0,
-      ingredientIndex: 0, mistakes: 0, brewGrade: 0, cleanOrders: 0, twistPerfectProgress: 0 },
-    story: { chapter: 0, anomalyId: (marked[0] || plots[0]).id, twistCharges: 0, twists: 0,
+      ingredientIndex: 0, mistakes: 0, brewGrade: 0, cleanOrders: 0, twistPerfectProgress: 0,
+      streak: 0, bestStreak: 0, challenge: emptyChallenge("pour") },
+    tutorial: { started: false, boughtMarked: false },
+    commissions: { mara: { complete: false, claimed: false }, dax: { complete: false, claimed: false },
+      nell: { complete: false, claimed: false }, watching: [] },
+    conversations: { seen: [], pending: [] },
+    settings: { ...DEFAULT_SETTINGS },
+    story: { chapter: 0, anomalyId: "1-1", twistCharges: 0, twists: 0,
       lastLine: "Someone scratched a spiral into the town map." },
     employees: Object.fromEntries(EMPLOYEES.map(employee => [employee.id, 0])),
     finance: { startingWealth: 120, trackingSinceDay: 0, coffeeEarnings: 0, realizedLandProfit: 0,
       insurancePaid: 0, taxPaid: 0, staffSpent: 0, buildingsBuilt: 0, worstDeal: null,
-      lastBill: null, history: [] },
+      lastBill: null, history: [], commissionEarnings: 0 },
     carGoal: { price: 3900, purchased: false, availabilityAnnounced: false }, lastEvent: null
   };
 }
@@ -116,7 +131,7 @@ function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
     const fresh = makeState(saved?.seed);
-    if (saved?.version === 1 && Number.isInteger(saved.seed) && saved.seed >= 0 &&
+    if ([1, 2].includes(saved?.version) && Number.isInteger(saved.seed) && saved.seed >= 0 &&
         Array.isArray(saved.plots) && saved.plots.length === 99 &&
         Array.isArray(saved.market) && saved.market.length === 4 && Number.isFinite(saved.money) &&
         Number.isInteger(saved.gameTime) && saved.gameTime >= 0 &&
@@ -131,9 +146,13 @@ function loadState() {
         Number.isInteger(saved.coffeeShopProgress.orderIndex) && saved.coffeeShopProgress.orderIndex >= 0 &&
         Number.isInteger(saved.coffeeShopProgress.served) && saved.coffeeShopProgress.served >= 0 &&
         ["new", "prepared", "completed"].includes(saved.coffeeShopProgress.step)) {
+      const savedChallenge = saved.coffeeShopProgress.challenge;
       saved.coffeeShopProgress = { ...fresh.coffeeShopProgress, ...saved.coffeeShopProgress };
       for (const plot of saved.plots) {
         if (!Number.isFinite(plot.surveyBonus) || plot.surveyBonus < 0) plot.surveyBonus = 0;
+        if (typeof plot.deedId !== "string") plot.deedId = plot.id;
+        if (!Number.isFinite(plot.effectsAtPurchase)) plot.effectsAtPurchase = 0;
+        if (plot.building && !plot.building.uid) plot.building.uid = `station-${plot.id}-${plot.building.builtOnDay || 0}`;
       }
       if (!saved.story || !getPlotFrom(saved.plots, saved.story.anomalyId)) {
         saved.story = { ...fresh.story };
@@ -168,17 +187,39 @@ function loadState() {
         saved.finance.trackingSinceDay = saved.gameTime;
         saved.finance.buildingsBuilt = saved.plots.filter(plot => plot.building).length;
       }
-      for (const key of ["startingWealth", "trackingSinceDay", "coffeeEarnings", "realizedLandProfit", "insurancePaid", "taxPaid", "staffSpent", "buildingsBuilt"]) {
+      for (const key of ["startingWealth", "trackingSinceDay", "coffeeEarnings", "realizedLandProfit", "insurancePaid", "taxPaid", "staffSpent", "buildingsBuilt", "commissionEarnings"]) {
         if (!Number.isFinite(saved.finance[key])) saved.finance[key] = fresh.finance[key];
       }
       saved.finance.history = Array.isArray(saved.finance.history) ? saved.finance.history.filter(entry =>
         entry && Number.isInteger(entry.day) && Number.isFinite(entry.amount) &&
-        ["coffee", "buy", "sell", "build", "staff", "bill", "car"].includes(entry.kind)).slice(-120) : [];
+        ["coffee", "buy", "sell", "build", "staff", "bill", "car", "commission"].includes(entry.kind)).slice(-120) : [];
       if (!saved.finance.lastBill || !["month", "insurance", "tax", "total", "wealth"].every(key => Number.isFinite(saved.finance.lastBill[key]))) saved.finance.lastBill = null;
       if (!saved.finance.worstDeal || !Number.isFinite(saved.finance.worstDeal.profit) ||
           !Number.isInteger(saved.finance.worstDeal.type) || !TYPES[saved.finance.worstDeal.type]) saved.finance.worstDeal = null;
       saved.carGoal = { ...fresh.carGoal, ...saved.carGoal,
         availabilityAnnounced: saved.carGoal.availabilityAnnounced === true };
+      saved.tutorial = { started: saved.tutorial?.started === true || saved.version === 1,
+        boughtMarked: saved.tutorial?.boughtMarked === true || saved.story.chapter >= 2 };
+      saved.commissions = { ...fresh.commissions, ...(saved.commissions || {}) };
+      for (const { id } of COMMISSIONS) saved.commissions[id] = {
+        complete: saved.commissions[id]?.complete === true, claimed: saved.commissions[id]?.claimed === true };
+      saved.commissions.watching = Array.isArray(saved.commissions.watching) ? saved.commissions.watching.filter(item =>
+        item && typeof item.station === "string" && typeof item.deed === "string").slice(0, 32) : [];
+      const dialogueIds = ["deeds", "turntable", "neighborhood", "roadster"];
+      saved.conversations = { seen: (Array.isArray(saved.conversations?.seen) ? saved.conversations.seen : []).filter(id => dialogueIds.includes(id)),
+        pending: (Array.isArray(saved.conversations?.pending) ? saved.conversations.pending : []).filter(id => dialogueIds.includes(id)) };
+      saved.settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
+      for (const key of ["music", "sfx"]) saved.settings[key] = Number.isFinite(saved.settings[key]) ? Math.max(0, Math.min(1, saved.settings[key])) : DEFAULT_SETTINGS[key];
+      saved.settings.sound = saved.settings.sound === true;
+      saved.settings.reducedMotion = typeof saved.settings.reducedMotion === "boolean" ? saved.settings.reducedMotion : null;
+      for (const key of ["streak", "bestStreak"]) saved.coffeeShopProgress[key] = Number.isInteger(saved.coffeeShopProgress[key]) ? Math.max(0, saved.coffeeShopProgress[key]) : 0;
+      const order = ORDERS[saved.coffeeShopProgress.orderIndex % ORDERS.length];
+      const challenge = savedChallenge;
+      saved.coffeeShopProgress.challenge = challenge && ["pour", "rhythm", "pressure"].includes(challenge.kind)
+        ? { kind: challenge.kind, started: challenge.started === true, elapsed: Math.max(0, Math.min(120000, Number(challenge.elapsed) || 0)),
+          fill: Math.max(0, Math.min(100, Number(challenge.fill) || 0)), taps: Array.isArray(challenge.taps) ? challenge.taps.filter(Number.isFinite).slice(0, 3) : [] }
+        : emptyChallenge(saved.version === 1 && saved.coffeeShopProgress.step === "prepared" ? "pressure" : order.challenge);
+      saved.version = 2;
       return saved;
     }
   } catch { /* Corrupt or disabled storage starts a fresh run. */ }
@@ -285,10 +326,43 @@ function publish(kind, detail = {}) {
     if (!kind) kind = "car-available";
   }
   if (kind) state.lastEvent = { kind, ...detail, token: Date.now() + Math.random() };
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* Play remains possible without storage. */ }
+  checkpoint();
   listeners.forEach(listener => listener(state, kind));
 }
 export function subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }
+export function checkpoint() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* Play remains possible without storage. */ }
+}
+export const hasRun = () => state.tutorial.started || state.gameTime > 0 || state.coffeeShopProgress.served > 0 || state.ownedPlots.length > 0 || state.carGoal.purchased;
+export function startRun() { state.tutorial.started = true; checkpoint(); }
+export function updateSettings(patch) {
+  for (const key of ["music", "sfx"]) if (Number.isFinite(patch[key])) state.settings[key] = Math.max(0, Math.min(1, patch[key]));
+  if (typeof patch.sound === "boolean") state.settings.sound = patch.sound;
+  if (typeof patch.reducedMotion === "boolean") state.settings.reducedMotion = patch.reducedMotion;
+  checkpoint();
+}
+function queueConversation(id) {
+  if (!state.conversations.seen.includes(id) && !state.conversations.pending.includes(id)) state.conversations.pending.push(id);
+}
+export function finishConversation(id) {
+  state.conversations.pending = state.conversations.pending.filter(entry => entry !== id);
+  if (!state.conversations.seen.includes(id)) state.conversations.seen.push(id);
+  checkpoint();
+}
+export const activeCommission = () => COMMISSIONS.find(({ id }) => !state.commissions[id].claimed) || null;
+export function claimCommission(id) {
+  const contract = activeCommission();
+  if (!contract || contract.id !== id || !state.commissions[id].complete) return false;
+  state.commissions[id].claimed = true;
+  state.money += contract.reward;
+  state.finance.commissionEarnings += contract.reward;
+  recordFinance("commission", contract.reward);
+  if (id === "dax") queueConversation("neighborhood");
+  // A recovery turn makes Dax's placement puzzle reachable without perfect brewing.
+  if (id === "mara") state.story.twistCharges = Math.max(1, state.story.twistCharges);
+  publish("commission", { commissionId: id, amount: contract.reward });
+  return true;
+}
 
 export function selectPlot(id) {
   if (!getPlot(id)) return false;
@@ -306,10 +380,12 @@ export function buySelected() {
   plot.owner = "player";
   plot.purchasePrice = cost;
   plot.costBasis = cost;
+  plot.effectsAtPurchase = plot.buildingEffects;
+  if (plot.id === state.story.anomalyId) state.tutorial.boughtMarked = true;
   state.ownedPlots.push(plot.id);
   recordFinance("buy", -cost);
   const reveal = plot.id === state.story.anomalyId && state.story.chapter >= 1 && state.story.chapter < 2;
-  if (reveal) { state.story.chapter = 2; state.story.twistCharges = 1; }
+  if (reveal) { state.story.chapter = 2; state.story.twistCharges = 1; queueConversation("turntable"); }
   publish("buy", { plotId: plot.id, amount: cost, storyBeat: reveal ? "reveal" : null });
   return true;
 }
@@ -319,6 +395,7 @@ export function sellSelected() {
   if (!plot || plot.owner !== "player") return false;
   const amount = saleValue(plot);
   const profit = amount - plot.costBasis;
+  if (profit >= 100 && plot.buildingEffects > (plot.effectsAtPurchase || 0)) state.commissions.nell.complete = true;
   state.money += amount;
   state.finance.realizedLandProfit += profit;
   if (!state.finance.worstDeal || profit < state.finance.worstDeal.profit) state.finance.worstDeal = { type: plot.type, profit };
@@ -338,7 +415,7 @@ export function buildSelected() {
   state.money -= BUILDING.cost;
   state.finance.buildingsBuilt += 1;
   recordFinance("build", -BUILDING.cost);
-  plot.building = { builtOnDay: state.gameTime };
+  plot.building = { builtOnDay: state.gameTime, uid: `station-${state.seed}-${state.finance.buildingsBuilt}` };
   plot.costBasis += BUILDING.cost;
   state.buildings.push(plot.id);
   updatePlotValues(false);
@@ -359,32 +436,62 @@ export function getTwistBlock(id = state.selectedId) {
   return [];
 }
 
-export function twistSelected() {
-  if (state.story.chapter < 2 || state.story.twistCharges < 1) return false;
+const DEED_FIELDS = ["deedId", "type", "basePrice", "owner", "purchasePrice", "costBasis", "building",
+  "buildingEffects", "effectsAtPurchase", "surveyBonus", "priceHistory"];
+const distance = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+const valued = plot => Math.max(1, Math.round(plot.basePrice * state.market[plot.type].currentPrice / TYPES[plot.type].base +
+  plot.buildingEffects + plot.surveyBonus + (plot.building ? BUILDING.resaleValue : 0)));
+function influenceFor(plots) {
+  return plots.filter(plot => plot.owner === "player" && plot.building).map(station => ({
+    id: station.id, neighbors: plots.filter(plot => plot.owner === "player" && plot.id !== station.id && distance(station, plot) <= BUILDING.radius).length
+  }));
+}
+export function previewTwist() {
   const block = getTwistBlock();
-  if (block.length !== 4) return false;
-  const fields = ["type", "basePrice", "owner", "purchasePrice", "costBasis", "building",
-    "buildingEffects", "surveyBonus", "priceHistory"];
-  const cargo = block.map(plot => Object.fromEntries(fields.map(field => [field, plot[field]])));
-  block.forEach((plot, index) => Object.assign(plot, cargo[(index + 3) % 4]));
-  for (const plot of block) if (plot.owner === "player") {
-    plot.surveyBonus = Math.min(TWIST_BONUS * 4, plot.surveyBonus + TWIST_BONUS);
-  }
-  const selectedIndex = block.findIndex(plot => plot.id === state.selectedId);
-  state.selectedId = block[(selectedIndex + 1) % 4].id;
+  if (block.length !== 4) return null;
+  const moves = block.map((source, index) => {
+    const target = block[(index + 1) % 4];
+    const after = { ...target, ...structuredClone(Object.fromEntries(DEED_FIELDS.map(field => [field, source[field]]))) };
+    if (after.owner === "player") after.surveyBonus = Math.min(TWIST_BONUS * 4, after.surveyBonus + TWIST_BONUS);
+    after.currentValue = after.currentPrice = valued(after);
+    return { from: source.id, to: target.id, before: structuredClone(source), after };
+  });
+  const projected = state.plots.map(plot => moves.find(move => move.to === plot.id)?.after || plot);
+  return { signature: JSON.stringify([state.seed, state.gameTime, state.selectedId, state.story.twists, state.story.twistCharges, block]),
+    moves, block: block.map(plot => plot.id), selectedId: moves.find(move => move.from === state.selectedId).to,
+    gain: moves.filter(move => move.before.owner === "player").reduce((sum, move) => sum + move.after.currentValue - move.before.currentValue, 0),
+    beforeInfluence: influenceFor(state.plots), afterInfluence: influenceFor(projected) };
+}
+export function commitTwist(preview) {
+  if (state.story.chapter < 2 || state.story.twistCharges < 1 || !preview) return false;
+  const current = previewTwist();
+  if (!current || current.signature !== preview.signature) return false;
+  // Recompute trusted destinations; callers cannot alter preview cargo to change the model.
+  for (const move of current.moves) Object.assign(getPlot(move.to), move.after);
+  state.selectedId = current.selectedId;
   state.ownedPlots = state.plots.filter(plot => plot.owner === "player").map(plot => plot.id);
   state.buildings = state.plots.filter(plot => plot.building).map(plot => plot.id);
   state.story.twistCharges -= 1;
   state.story.twists += 1;
   state.story.chapter = Math.max(3, state.story.chapter);
   updatePlotValues(false);
-  for (const plot of block) {
+  if (state.tutorial.boughtMarked && current.moves.some(move => move.before.owner === "player")) state.commissions.mara.complete = true;
+  const watching = [];
+  for (const move of current.moves.filter(move => move.after.owner === "player" && move.after.building)) {
+    for (const plot of state.plots.filter(plot => plot.owner === "player" && plot.id !== move.to && distance(plot, move.after) <= BUILDING.radius)) {
+      watching.push({ station: move.after.building.uid, deed: plot.deedId });
+    }
+  }
+  state.commissions.watching = watching;
+  for (const id of current.block) {
+    const plot = getPlot(id);
     plot.priceHistory.push(plot.currentValue);
     if (plot.priceHistory.length > 48) plot.priceHistory.shift();
   }
-  publish("twist", { plotId: state.selectedId, block: block.map(plot => plot.id) });
+  publish("twist", { plotId: state.selectedId, block: current.block });
   return true;
 }
+export function twistSelected() { return commitTwist(previewTwist()); }
 
 function updatePlotValues(recordHistory = true) {
   for (const plot of state.plots) {
@@ -401,6 +508,7 @@ function updatePlotValues(recordHistory = true) {
 }
 
 export function tick() {
+  const beforeEffects = new Map(state.plots.map(plot => [plot.deedId, plot.buildingEffects]));
   state.gameTime += 1;
   state.market.forEach((entry, index) => {
     entry.previousPrice = entry.currentPrice;
@@ -422,6 +530,15 @@ export function tick() {
     }
   }
   updatePlotValues();
+  for (const watch of state.commissions.watching) {
+    const station = state.plots.find(plot => plot.building?.uid === watch.station && plot.owner === "player");
+    const target = state.plots.find(plot => plot.deedId === watch.deed && plot.owner === "player");
+    if (station && target && distance(station, target) <= BUILDING.radius && target.buildingEffects > beforeEffects.get(target.deedId)) {
+      state.commissions.dax.complete = true;
+      state.commissions.watching = [];
+      break;
+    }
+  }
   if (state.gameTime % DAYS_PER_MONTH === 0) {
     const bill = { ...monthlyBillQuote(), month: state.gameTime / DAYS_PER_MONTH };
     // A small cash overdraft is allowed; land is never forcibly sold. Coffee work clears it.
@@ -440,8 +557,11 @@ export function prepareCoffee(ingredient) {
   const order = ORDERS[coffee.orderIndex % ORDERS.length];
   const correct = ingredient === order.ingredients[coffee.ingredientIndex];
   if (correct) coffee.ingredientIndex += 1;
-  else coffee.mistakes = Math.min(3, coffee.mistakes + 1);
-  if (coffee.ingredientIndex === order.ingredients.length) coffee.step = "prepared";
+  else { coffee.mistakes = Math.min(3, coffee.mistakes + 1); coffee.streak = 0; }
+  if (coffee.ingredientIndex === order.ingredients.length) {
+    coffee.step = "prepared";
+    coffee.challenge = emptyChallenge(order.challenge);
+  }
   publish(coffee.step === "prepared" ? "coffee-ready" : "coffee-ingredient", { correct, ingredient });
   return correct;
 }
@@ -450,6 +570,7 @@ export function completeCoffee(grade) {
   if (coffee.step !== "prepared" || !Number.isInteger(grade) || grade < 0 || grade > 2) return false;
   coffee.brewGrade = grade;
   coffee.step = "completed";
+  if (grade !== 2) coffee.streak = 0;
   publish("coffee-brew", { grade });
   return true;
 }
@@ -458,25 +579,29 @@ export function deliverCoffee(customerId) {
   if (coffee.step !== "completed" || !CUSTOMERS.some(customer => customer.id === customerId)) return false;
   const order = ORDERS[coffee.orderIndex % ORDERS.length];
   const correct = customerId === order.customer;
-  const basePay = Math.max(28, order.pay + coffee.brewGrade * 8 +
+  const perfect = correct && coffee.mistakes === 0 && coffee.brewGrade === 2;
+  coffee.streak = perfect ? coffee.streak + 1 : 0;
+  coffee.bestStreak = Math.max(coffee.bestStreak, coffee.streak);
+  const basePay = Math.max(order.pay, order.pay + coffee.brewGrade * 8 +
     (coffee.mistakes === 0 ? 8 : -coffee.mistakes * 4) + (correct ? 12 : -20));
-  const pay = Math.round(basePay * (1 + employeeLevel("manager") * .12));
+  const pay = Math.round(basePay * (1 + employeeLevel("manager") * .12) * (1 + Math.min(5, coffee.streak) * .05));
   state.money += pay;
   state.finance.coffeeEarnings += pay;
   recordFinance("coffee", pay);
   coffee.served += 1;
   if (correct) coffee.correctDeliveries += 1;
   if (correct) state.story.lastLine = order.line;
-  const perfect = correct && coffee.mistakes === 0 && coffee.brewGrade === 2;
   if (perfect) coffee.cleanOrders += 1;
   let storyBeat = null;
   if (state.story.chapter === 0 && coffee.correctDeliveries >= 2) {
     state.story.chapter = 1;
     storyBeat = "lead";
+    queueConversation("deeds");
     if (getPlot(state.story.anomalyId).owner === "player") {
       state.story.chapter = 2;
       state.story.twistCharges = 1;
       storyBeat = "reveal";
+      queueConversation("turntable");
     }
   }
   let chargeEarned = false;
@@ -493,7 +618,8 @@ export function deliverCoffee(customerId) {
   coffee.ingredientIndex = 0;
   coffee.mistakes = 0;
   coffee.brewGrade = 0;
-  publish("coffee-deliver", { amount: pay, correct, perfect, storyBeat, chargeEarned,
+  coffee.challenge = emptyChallenge(ORDERS[coffee.orderIndex % ORDERS.length].challenge);
+  publish("coffee-deliver", { amount: pay, correct, perfect, storyBeat, chargeEarned, customerId, streak: coffee.streak,
     line: correct ? order.line : "Wrong customer. The tip and the rumor are gone." });
   return true;
 }
@@ -501,12 +627,60 @@ export function purchaseCar() {
   if (state.carGoal.purchased || state.money < state.carGoal.price) return false;
   state.money -= state.carGoal.price;
   state.carGoal.purchased = true;
+  queueConversation("roadster");
   recordFinance("car", -state.carGoal.price);
   publish("goal", { amount: state.carGoal.price });
   return true;
 }
 
 export function resetGame() {
-  Object.assign(state, makeState());
+  const settings = { ...state.settings };
+  Object.assign(state, makeState(Math.floor(Math.random() * 0x7fffffff)));
+  state.settings = settings;
+  state.tutorial.started = true;
   publish("reset");
+}
+
+export const pressurePosition = elapsed => {
+  const sweep = (elapsed / 1550) % 2;
+  return (sweep <= 1 ? sweep : 2 - sweep) * 100;
+};
+export function startCoffeeChallenge() {
+  const coffee = state.coffeeShopProgress;
+  if (coffee.step !== "prepared" || coffee.challenge.started) return false;
+  coffee.challenge.started = true;
+  publish("challenge-start");
+  return true;
+}
+export function advanceCoffee(delta, pouring = false) {
+  const coffee = state.coffeeShopProgress;
+  const challenge = coffee.challenge;
+  if (coffee.step !== "prepared" || !challenge.started || !Number.isFinite(delta) || delta <= 0) return;
+  challenge.elapsed += delta;
+  if (challenge.kind === "pour" && pouring) challenge.fill = Math.min(100, challenge.fill + delta / 42);
+  if (challenge.kind === "pour" && challenge.fill >= 100) completeCoffee(0);
+  if (challenge.kind === "rhythm" && challenge.elapsed >= 3450) finishCoffeeChallenge();
+}
+export function tapCoffeeBeat() {
+  const coffee = state.coffeeShopProgress, challenge = coffee.challenge;
+  if (coffee.step !== "prepared" || challenge.kind !== "rhythm" || !challenge.started || challenge.taps.length >= 3) return false;
+  if (challenge.taps.length && challenge.elapsed - challenge.taps.at(-1) < 180) return false;
+  challenge.taps.push(challenge.elapsed);
+  checkpoint();
+  if (challenge.taps.length === 3) finishCoffeeChallenge();
+  return true;
+}
+export function finishCoffeeChallenge() {
+  const coffee = state.coffeeShopProgress, challenge = coffee.challenge;
+  if (coffee.step !== "prepared" || !challenge.started) return false;
+  const order = ORDERS[coffee.orderIndex % ORDERS.length];
+  let grade = 0;
+  if (challenge.kind === "rhythm") {
+    const errors = challenge.taps.map((tap, index) => Math.abs(tap - (index + 1) * 1000));
+    grade = errors.length === 3 && errors.every(error => error <= 150) ? 2 : errors.length === 3 && errors.every(error => error <= 350) ? 1 : 0;
+  } else {
+    const error = Math.abs((challenge.kind === "pour" ? challenge.fill : pressurePosition(challenge.elapsed)) - order.target);
+    grade = error <= 8 ? 2 : error <= 19 ? 1 : 0;
+  }
+  return completeCoffee(grade);
 }

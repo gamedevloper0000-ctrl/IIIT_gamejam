@@ -2,6 +2,14 @@
 
 A retro land trading mystery built on the project's Canvas map, with the supplied export terrain, Kenney Tiny Town scenery, a playable coffee counter, and a local team to grow your business.
 
+## Game jam build
+
+The submission project is this folder, `D:\Vnit_gamejam`. Upload `submission/plot-twist-jam.zip`. The same folder contains the cover, three gameplay screenshots, an actual twist-animation GIF, controls/credits, and the release manifest. See `submission/CONTROLS-AND-CREDITS.md` for upload notes and eligibility checks still requiring the jam's rules.
+
+This pass adds the title/menu flow, guided objectives, four conversations, three one-time character commissions, twist previews and a 650 ms turn, three brewing challenges, a 25% maximum clean streak, direct customer handoffs, reduced motion, audio levels, and the roadster ending. A shared pause clock covers economy and brewing. Legacy saves migrate to version 2 using the existing storage key.
+
+Twenty automated model checks cover the old economy plus rewards, preview/commit agreement, pacing prerequisites, all three challenges, save migration, storage failure, particle bounds, and nested pauses. `tools/rehearse.mjs` records a deterministic pacing estimate; this is **not** a human playtest. Three first-time human playtests and jam-specific eligibility remain unverified.
+
 ## Run
 
 From the project folder, start a local static server:
@@ -14,7 +22,7 @@ Open <http://localhost:8765/game.htm>. `plotholder.htm` redirects to the same ga
 
 ## Play
 
-1. At the coffee counter, tap ingredients in ticket order, stop the moving brew needle in the gold zone, and tap the right person in the visible line to deliver. Accuracy changes the tip.
+1. At the coffee counter, tap ingredients in ticket order. Hold/release to pour lattes and iced drinks, tap three beats for cappuccino, or stop the pressure needle for espresso. Hand the cup to the front customer. Perfect orders earn a growing streak bonus; mistakes keep the base pay.
 2. Two correct deliveries reveal a stamped parcel on the map. Buy it to uncover the town's *plot twist* and earn a turn of the zoning board.
 3. Select a parcel and use **Twist the plots** to rotate its four-plot block clockwise. Deeds, ownership, and buildings move together; owned deeds gain a small survey premium. Three perfect coffee orders earn another turn.
 4. Buy land, watch the Market, build on owned parcels, and sell when the value suits you. Sales have a visible 5% closing fee.
@@ -23,7 +31,7 @@ Open <http://localhost:8765/game.htm>. `plotholder.htm` redirects to the same ga
 7. Save $3,900. A one-time notification links to the red roadster on the Goal panel. You choose when to buy it.
 
 Buying the car opens a results screen and pauses the game clock. **Continue** preserves the full run; **Restart** asks for confirmation before clearing it. You can reopen results from the Goal panel after continuing. The game autosaves in browser local storage, and a new run generates a new terrain layout.
-Sound is off by default. Use **Sound on/off** in the header to play the music and effects. This preference is saved separately from game progress.
+Sound is off by default. Use **Sound on/off** in the header. **Menu → Settings** controls music/SFX volumes and reduced motion; these preferences are saved with progress and retained on restart.
 
 ## Project notes
 
@@ -44,7 +52,7 @@ Sound is off by default. Use **Sound on/off** in the header to play the music an
 - `export.png` was supplied by the project owner in `export.zip` and is preserved as provided. The roadster is original SVG art; staff portraits are original CSS pixel art.
 - “Step dirt (Cozy Game SFX Free)” by [heyheytheree](https://freesound.org/people/heyheytheree/sounds/872597/), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Supplied by the project owner; used for a customer leaving the queue.
 - “Pouring coffee” by [Maajora](https://freesound.org/people/Maajora/sounds/432775/) and “Tea cup set down.mp3” by [TheHiraHira](https://freesound.org/people/TheHiraHira/sounds/460242/), both CC0. Local MP3 preview copies are bundled for brew and delivery effects.
-- “The Morning Air” by Evan King was supplied by the project owner. The included copy is downsampled to 22.05 kHz mono for a smaller game download. The repository does not establish its redistribution license, so check that before publishing the game.
+- “Corner Cup” is the active, original synth loop. `tools/compose_music.py` reproduces it without samples. The previously supplied “The Morning Air” by Evan King is retained only in the development folder and **excluded from the release ZIP**, because redistribution rights remain unverified.
 - The coffee queue characters are original CSS pixel art inspired by the supplied reference image. The watermarked image is not included.
 
 ## Verify

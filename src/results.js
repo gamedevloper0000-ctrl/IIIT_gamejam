@@ -14,6 +14,7 @@ export function renderResults(restartArmed = false) {
     ["CASH AFTER PURCHASE", money(state.money)], ["TOTAL LAND OWNED", `${state.ownedPlots.length} ${state.ownedPlots.length === 1 ? "parcel" : "parcels"}`],
     ["OWNED LAND VALUE", money(ownedValue())], ["NET RUN GAIN", money(netRunProfit())],
     ["BUILDINGS CONSTRUCTED", finance.buildingsBuilt], ["COFFEE EARNINGS", money(finance.coffeeEarnings)],
+    ["COMMISSIONS EARNED", money(finance.commissionEarnings)], ["BEST CLEAN STREAK", state.coffeeShopProgress.bestStreak],
     ["BEST MARKET TYPE", `${TYPES[best.type].name} ${best.gain >= 0 ? "+" : ""}${best.gain.toFixed(1)}%`],
     ["LOWEST INVESTMENT RETURN", worst ? `${TYPES[worst.type].name} · ${money(worst.profit)}` : "No investments yet"],
     ["INSURANCE + TAX PAID", money(finance.insurancePaid + finance.taxPaid)],

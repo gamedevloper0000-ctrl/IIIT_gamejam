@@ -1,0 +1,10 @@
+{
+  "firstOrderSeconds": 20.65,
+  "firstTwistSeconds": 87.95,
+  "allCommissionsSeconds": 198.05,
+  "carSeconds": 576,
+  "orders": 23,
+  "commissions": 2150,
+  "cashAfterCar": 69,
+  "note": "Model rehearsal: 20 seconds per order, every fourth brew graded good, explicit reading pauses. Human playtest pending."
+}
